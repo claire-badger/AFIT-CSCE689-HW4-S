@@ -13,6 +13,7 @@
 #include <crypto++/rijndael.h>
 #include <crypto++/gcm.h>
 #include <crypto++/aes.h>
+#include <random>
 
 using namespace CryptoPP;
 
@@ -61,6 +62,15 @@ TCPConn::TCPConn(LogMgr &server_log, CryptoPP::SecByteBlock &key, unsigned int v
 
    c_endauth = c_auth;
    c_endauth.insert(c_endauth.begin()+1, 1, slash);
+
+    c_rand.push_back((uint8_t) '<');
+    c_rand.push_back((uint8_t) 'R');
+    c_rand.push_back((uint8_t) 'A');
+    c_rand.push_back((uint8_t) 'N');
+    c_rand.push_back((uint8_t) '>');
+
+    c_endrand = c_rand;
+    c_endrand.insert(c_endrand.begin()+1, 1, slash);
 
    c_sid.push_back((uint8_t) '<');
    c_sid.push_back((uint8_t) 'S');
@@ -177,12 +187,27 @@ void TCPConn::handleConnection() {
             sendSID();
             break;
 
-         // Server: Wait for the SID from a newly-connected client, then send our SID
+         // Server: Wait for the SID from a newly-connected client
          case s_connected:
             waitForSID();
             break;
-   
-         // Client: connecting user - replicate data
+
+            //client authentication part 1
+          case s_clientauth1:
+              authClient1();
+              break;
+
+              //server authentication part1
+          case s_serverauth1:
+              authServer1();
+              break;
+
+              //client authenication part 2
+          case s_clientauth2:
+              authClient2();
+              break;
+
+              // Client: connecting user - replicate data
          case s_datatx:
             transmitData();
             break;
@@ -224,7 +249,7 @@ void TCPConn::sendSID() {
    wrapCmd(buf, c_sid, c_endsid);
    sendData(buf);
 
-   _status = s_datatx; 
+   _status = s_clientauth1;
 }
 
 /**********************************************************************************************
@@ -238,8 +263,8 @@ void TCPConn::waitForSID() {
    // If data on the socket, should be our Auth string from our host server
    if (_connfd.hasData()) {
       std::vector<uint8_t> buf;
-
-      if (!getData(buf))
+      getData(buf);
+      if (buf.size() <= 0)
          return;
 
       if (!getCmdData(buf, c_sid, c_endsid)) {
@@ -252,14 +277,129 @@ void TCPConn::waitForSID() {
 
       std::string node(buf.begin(), buf.end());
       setNodeID(node.c_str());
-
+      sendRandomAuth();
+      /*
       // Send our Node ID
       buf.assign(_svr_id.begin(), _svr_id.end());
       wrapCmd(buf, c_sid, c_endsid);
       sendData(buf);
-
-      _status = s_datarx;
+*/
+      _status = s_serverauth1;
    }
+}
+
+/**********************************************************************************************
+ * waitForSID()  - receives the SID and sends our SID
+ *
+ *    Throws: socket_error for network issues, runtime_error for unrecoverable issues
+ **********************************************************************************************/
+
+void TCPConn::authClient1(){
+    if (_connfd.hasData()) {
+        std::vector<uint8_t> buf;
+
+        if (!getData(buf))
+            return;
+
+        if (!getCmdData(buf, c_rand, c_endrand)) {
+            std::stringstream msg;
+            msg << "Tried to receive random bytes. Failed. Node:" << getNodeID() << "\n";
+            _server_log.writeLog(msg.str().c_str());
+        }
+
+        encryptData(buf);
+        wrapCmd(buf, c_auth, c_endauth);
+        sendData(buf);
+        sendRandomAuth();
+
+        _status = s_clientauth2;
+    }
+}
+
+void TCPConn::authClient2(){
+    if (_connfd.hasData()) {
+        std::vector<uint8_t> buf;
+
+        if (!getData(buf))
+            return;
+
+        if (!getCmdData(buf, c_auth, c_endauth)) {
+            std::stringstream msg;
+            msg << "Tried to receive encrypted bytes. Failed. Node:" << getNodeID() << "\n";
+            _server_log.writeLog(msg.str().c_str());
+        }
+
+        //parse the data inbetween the tags perhaps.. have to do so encrypted and random numbers
+        decryptData(buf); //make sure if the tags were still on
+        std::string translatedData (buf.begin(), buf.end()); //not sure if i'm doing this right
+        std::string str(_authstr.begin(), _authstr.end());
+
+        if (translatedData.compare(str) != 0){ //check to make sure that the encrypted is the same as athe stored string
+            std::stringstream msg;
+            msg << "Bad encyrption from the server. Node:" << getNodeID() << "\n";
+            _server_log.writeLog(msg.str().c_str());
+            disconnect();
+            return;
+        }
+        _status = s_datatx;
+    }
+}
+
+void TCPConn::authServer1(){
+    if (_connfd.hasData()) {
+        std::vector<uint8_t> buf;
+
+        if (!getData(buf))
+            return;
+
+        std::vector<uint8_t> newcmd = getMultipleCmdData(buf, c_auth, c_endauth);
+        if (newcmd.size() == 0) {
+            std::stringstream msg;
+            msg << "Tried to receive encrypted bytes. Failed. Node:" << getNodeID() << "\n";
+            _server_log.writeLog(msg.str().c_str());
+        }
+
+        decryptData(newcmd); //find out if the tags are still on
+        std::string translatedData (newcmd.begin(), newcmd.end());
+        std::string str(_authstr.begin(), _authstr.end());
+
+        if (translatedData == str) {
+
+            std::vector<uint8_t> newcmd2 = getMultipleCmdData(buf, c_rand, c_endrand);
+            if (newcmd2.size() == 0) {
+                std::stringstream msg;
+                msg << "Tried to receive random bytes. Failed. Node:" << getNodeID() << "\n";
+                _server_log.writeLog(msg.str().c_str());
+            }
+
+            encryptData(newcmd2);
+            wrapCmd(newcmd2, c_auth, c_endauth);
+            sendData(newcmd2);
+
+            std::vector<uint8_t> svrid;
+            //send SID of server
+            svrid.assign(_svr_id.begin(), _svr_id.end());
+            wrapCmd(svrid, c_sid, c_endsid);
+            sendData(svrid);
+
+            _status = s_datarx;
+        }
+    }
+}
+
+void TCPConn::sendRandomAuth(){
+    createRandAuthStr();
+    auto buf = std::vector<uint8_t>(auth_size);
+    std::copy(_authstr.begin(), _authstr.end(), buf.begin());
+    wrapCmd(buf, c_rand, c_endrand);
+    sendData(buf);
+}
+
+void TCPConn::createRandAuthStr(){
+    std::default_random_engine generator{std::random_device{}()};
+    std::uniform_int_distribution<uint8_t > distribution(0, 225);
+    for (int i = 0; i < auth_size; i++)
+        _authstr.emplace_back(distribution(generator));
 }
 
 
@@ -499,11 +639,26 @@ bool TCPConn::getCmdData(std::vector<uint8_t> &buf, std::vector<uint8_t> &startc
    auto start = findCmd(temp, startcmd);
    auto end = findCmd(temp, endcmd);
 
-   if ((start == temp.end()) || (end == temp.end()))
+   if ((start == temp.end()) || (end == temp.end())  || (start == end))
       return false;
 
    buf.assign(start + startcmd.size(), end);
    return true;
+}
+
+std::vector<uint8_t> TCPConn::getMultipleCmdData(std::vector<uint8_t> buf, std::vector<uint8_t> &startcmd,
+                                        std::vector<uint8_t> &endcmd) {
+    std::vector<uint8_t> temp = buf;
+    std::vector<uint8_t> cmd;
+    auto start = findCmd(temp, startcmd);
+    auto end = findCmd(temp, endcmd);
+
+    if ((start == temp.end()) || (end == temp.end())  || (start == end))
+        return cmd;
+
+    cmd.assign(start + startcmd.size(), end);
+    return cmd;
+
 }
 
 /**********************************************************************************************

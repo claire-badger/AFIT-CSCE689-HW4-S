@@ -16,7 +16,7 @@ public:
    ~TCPConn();
 
    // The current status of the connection
-   enum statustype { s_none, s_connecting, s_connected, s_datatx, s_datarx, s_waitack, s_hasdata };
+   enum statustype { s_none, s_connecting, s_connected, s_datatx, s_datarx, s_waitack, s_hasdata, s_clientauth1,s_clientauth2, s_serverauth1, s_serverauth2 };
 
    statustype getStatus() { return _status; };
 
@@ -55,6 +55,17 @@ public:
    // Connections can set the node or server ID of this connection
    void setNodeID(const char *new_id) { _node_id = new_id; };
    void setSvrID(const char *new_id) { _svr_id = new_id; };
+   void authClient1();
+
+    void authClient2();
+
+    void authServer1();
+
+    void authServer2();
+
+   void createRandAuthStr();
+
+   void sendRandomAuth();
 
    // Closes the socket
    void disconnect();
@@ -85,7 +96,11 @@ protected:
    bool getCmdData(std::vector<uint8_t> &buf, std::vector<uint8_t> &startcmd,
                                                     std::vector<uint8_t> &endcmd);
 
-   // Places startcmd and endcmd strings around the data in buf and returns it in buf
+   std::vector<uint8_t> getMultipleCmdData(std::vector<uint8_t> buf, std::vector<uint8_t> &startcmd,
+                             std::vector<uint8_t> &endcmd);
+
+
+        // Places startcmd and endcmd strings around the data in buf and returns it in buf
    void wrapCmd(std::vector<uint8_t> &buf, std::vector<uint8_t> &startcmd,
                                                     std::vector<uint8_t> &endcmd);
 
@@ -94,7 +109,7 @@ private:
 
    bool _connected = false;
 
-   std::vector<uint8_t> c_rep, c_endrep, c_auth, c_endauth, c_ack, c_sid, c_endsid;
+   std::vector<uint8_t> c_rep, c_endrep, c_auth, c_endauth, c_ack, c_sid, c_endsid, c_rand, c_endrand;
 
    statustype _status = s_none;
 
@@ -111,7 +126,7 @@ private:
    std::vector<uint8_t> _outputbuf;
 
    CryptoPP::SecByteBlock &_aes_key; // Read from a file, our shared key
-   std::string _authstr;   // remembers the random authorization string sent
+   std::vector<uint8_t> _authstr;   // remembers the random authorization string sent
 
    unsigned int _verbosity;
 

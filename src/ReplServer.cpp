@@ -69,6 +69,31 @@ void ReplServer::replicate(const char *ip_addr, unsigned short port) {
    replicate();
 }
 
+void ReplServer::adjustSkew(){
+    _plotdb.sortByTime();
+    std::map<int, double> skewMap;
+    double priorityTime;
+
+    std::list<DronePlot>::iterator dpit = _plotdb.begin();
+    for ( ; dpit != _plotdb.end(); dpit++) {
+        if (skewMap.find(dpit->node_id) == skewMap.end()) {
+            skewMap.emplace( std::pair(dpit->node_id, dpit->timestamp)); //grab first time a node is seen and its timestamp
+            if (dpit->node_id == priorityNode)
+                priorityTime = dpit->timestamp;
+        }
+    }
+
+    std::map<int, double>::iterator it;
+    for ( it = skewMap.begin(); it != skewMap.end(); it++ )
+        it->second = (priorityTime- it->second);
+
+    std::list<DronePlot>::iterator adjust = _plotdb.begin();
+    for ( ; adjust != _plotdb.end(); adjust++) {
+        dpit->timestamp -= skewMap[dpit->node_id];
+    }
+
+}
+
 void ReplServer::replicate() {
 
    // Track when we started the server
@@ -82,6 +107,16 @@ void ReplServer::replicate() {
    if (_verbosity >= 2)
       std::cout << "Server bound to " << _ip_addr << ", port: " << _port << " and listening\n";
 
+   //check to see which of the servers has the lowest node ID, priority for election goes to lowest first
+   int highest = 100;
+    std::list<DronePlot>::iterator dpit = _plotdb.begin();
+    for ( ; dpit != _plotdb.end(); dpit++) {
+        if (dpit->node_id < highest)
+            highest = dpit->node_id;
+    }
+    priorityNode = highest;
+
+    adjustSkew();
   
    // Replicate until we get the shutdown signal
    while (!_shutdown) {
@@ -123,6 +158,7 @@ void ReplServer::replicate() {
 
 unsigned int ReplServer::queueNewPlots() {
    std::vector<uint8_t> marshall_data;
+    std::list<DronePlot> current_plots_seen;
    unsigned int count = 0;
 
    if (_verbosity >= 3)
@@ -132,17 +168,32 @@ unsigned int ReplServer::queueNewPlots() {
    std::list<DronePlot>::iterator dpit = _plotdb.begin();
    for ( ; dpit != _plotdb.end(); dpit++) {
 
-      // If this is a new one, marshall it and clear the flag
-      if (dpit->isFlagSet(DBFLAG_NEW)) {
-         
-         dpit->serialize(marshall_data);
-         dpit->clrFlags(DBFLAG_NEW);
+       //make sure each new plot's time is aligned with the priority node's time
 
-         count++;
-      }
+       bool duplicate = false;
+       std::list<DronePlot>::iterator duplicate_check = current_plots_seen.begin();
+
+       for ( ; duplicate_check != current_plots_seen.end(); duplicate_check++) {
+            if (duplicate_check->drone_id == dpit->drone_id){
+                if ((duplicate_check->timestamp - dpit->timestamp) < 3)
+                    duplicate = true;
+            }
+       }
+
+       current_plots_seen.emplace_back(*dpit);
+
+       if (!duplicate) {
+           // If this is a new one, marshall it and clear the flag
+           if (dpit->isFlagSet(DBFLAG_NEW)) {
+
+               dpit->serialize(marshall_data);
+               dpit->clrFlags(DBFLAG_NEW);
+
+               count++;
+           }
+       }
       if (marshall_data.size() % DronePlot::getDataSize() != 0)
          throw std::runtime_error("Issue with marshalling!");
-
    }
   
    if (count == 0) {
@@ -151,8 +202,9 @@ unsigned int ReplServer::queueNewPlots() {
 
       return 0;
    }
- 
-   // Add the count onto the front
+
+
+    // Add the count onto the front
    std::cout << "Adding in count: " << count << "\n";
    uint8_t *ctptr_begin = (uint8_t *) &count;
    marshall_data.insert(marshall_data.begin(), ctptr_begin, ctptr_begin+sizeof(unsigned int));

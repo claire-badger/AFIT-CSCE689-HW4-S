@@ -39,6 +39,7 @@ private:
    void addSingleDronePlot(std::vector<uint8_t> &data);
 
    unsigned int queueNewPlots();
+   void adjustSkew();
 
 
    QueueMgr _queue;    
@@ -63,6 +64,7 @@ private:
    // Used to bind the server
    std::string _ip_addr;
    unsigned short _port;
+   unsigned int priorityNode = -1; //-1 means not set yet
 };
 
 
