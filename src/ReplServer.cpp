@@ -74,7 +74,7 @@ void ReplServer::adjustSkew(){
             skewMap.emplace(std::pair(dpit->node_id, (dpit->timestamp - lastSeenTime)));
             currentSkew = dpit->timestamp - lastSeenTime;
         }
-            
+
         }
         if (lastDroneID != dpit->node_id)
             lastSeenTime = dpit->timestamp; //captures latest time from the priority node
@@ -121,7 +121,7 @@ void ReplServer::replicate() {
 
 
     //go through all of the _plotdb object and adjust the skew
-    adjustSkew();
+   // adjustSkew();
 
     // Replicate until we get the shutdown signal
     while (!_shutdown) {
