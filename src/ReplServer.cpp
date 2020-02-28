@@ -61,21 +61,27 @@ time_t ReplServer::getAdjustedTime() {
  **********************************************************************************************/
 void ReplServer::adjustSkew(){
     _plotdb.sortByTime();
+    //set up the priorityNode or the "coordinator"
+    priorityNode = _plotdb.begin()->node_id;
     std::map<int, double> skewMap;
-    double priorityTime;
+    double lastSeenTime = _plotdb.begin()->timestamp;
+    int lastDroneID = priorityNode;
+    int currentSkew = 0;
 
     std::list<DronePlot>::iterator dpit = _plotdb.begin();
     for ( ; dpit != _plotdb.end(); dpit++) {
-        if (skewMap.find(dpit->node_id) == skewMap.end()) {
-            skewMap.emplace( std::pair(dpit->node_id, dpit->timestamp)); //grab first time a node is seen and its timestamp
-            if (dpit->node_id == priorityNode)
-                priorityTime = dpit->timestamp;
+        if (dpit->node_id != priorityNode){{
+            skewMap.emplace(std::pair(dpit->node_id, (dpit->timestamp - lastSeenTime)));
+            currentSkew = dpit->timestamp - lastSeenTime;
         }
+            
+        }
+        if (lastDroneID != dpit->node_id)
+            lastSeenTime = dpit->timestamp; //captures latest time from the priority node
+
+        lastDroneID = dpit->node_id;
     }
 
-    std::map<int, double>::iterator it;
-    for ( it = skewMap.begin(); it != skewMap.end(); it++ )
-        it->second = (priorityTime- it->second);
 
     std::list<DronePlot>::iterator adjust = _plotdb.begin();
     for ( ; adjust != _plotdb.end(); adjust++) {
@@ -114,15 +120,7 @@ void ReplServer::replicate() {
         std::cout << "Server bound to " << _ip_addr << ", port: " << _port << " and listening\n";
 
 
-    //set up the priorityNode or the "coordinator"
-    int highest = 100;
-    std::list<DronePlot>::iterator dpit = _plotdb.begin();
-    for ( ; dpit != _plotdb.end(); dpit++) {
-        if (dpit->node_id < highest)
-            highest = dpit->node_id;
-    }
-    priorityNode = highest;
-
+    //go through all of the _plotdb object and adjust the skew
     adjustSkew();
 
     // Replicate until we get the shutdown signal
@@ -175,13 +173,13 @@ unsigned int ReplServer::queueNewPlots() {
     for ( ; dpit != _plotdb.end(); dpit++) {
 
         //make sure each new plot's time is aligned with the priority node's time
-
         bool duplicate = false;
-        std::list<DronePlot>::iterator duplicate_check = current_plots_seen.begin();
+        std::list<DronePlot>::iterator duplicate_check = _plotdb.begin();
 
+        //go through to make sure there are no duplicates
         for ( ; duplicate_check != current_plots_seen.end(); duplicate_check++) {
-            if (duplicate_check->drone_id == dpit->drone_id){
-                if ((duplicate_check->timestamp - dpit->timestamp) < 3) //check and make sure that this is right
+            if (duplicate_check->drone_id == dpit->drone_id){ //check if the drone IDs are the same
+                if ((duplicate_check->latitude - dpit->latitude) < 5 && (duplicate_check->longitude - dpit->longitude) < 5 ) //check and make sure duplicates are within certain lat/long
                     duplicate = true;
             }
         }

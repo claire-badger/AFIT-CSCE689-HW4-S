@@ -289,7 +289,7 @@ void TCPConn::waitForSID() {
 }
 
 /**********************************************************************************************
- * waitForSID()  - receives the SID and sends our SID
+ * authClient1()  - receives the random string from server and sends it back encrypted
  *
  *    Throws: socket_error for network issues, runtime_error for unrecoverable issues
  **********************************************************************************************/
@@ -316,6 +316,12 @@ void TCPConn::authClient1(){
     }
 }
 
+/**********************************************************************************************
+ * authClient2()  - receives the encrypted string from the server checks if it is the string saved in
+ * TCP conn in _authstr, and receives the SID from the server
+ *
+ *    Throws: socket_error for network issues, runtime_error for unrecoverable issues
+ **********************************************************************************************/
 void TCPConn::authClient2(){
     if (_connfd.hasData()) {
         std::vector<uint8_t> buf;
@@ -323,15 +329,16 @@ void TCPConn::authClient2(){
         if (!getData(buf))
             return;
 
-        if (!getCmdData(buf, c_auth, c_endauth)) {
+        std::vector<uint8_t> newcmd = getMultipleCmdData(buf, c_auth, c_endauth);
+        if (newcmd.size() == 0) {
             std::stringstream msg;
             msg << "Tried to receive encrypted bytes. Failed. Node:" << getNodeID() << "\n";
             _server_log.writeLog(msg.str().c_str());
         }
 
         //parse the data inbetween the tags perhaps.. have to do so encrypted and random numbers
-        decryptData(buf); //make sure if the tags were still on
-        std::string translatedData (buf.begin(), buf.end()); //not sure if i'm doing this right
+        decryptData(newcmd); //make sure if the tags were still on
+        std::string translatedData (newcmd.begin(), newcmd.end()); //not sure if i'm doing this right
         std::string str(_authstr.begin(), _authstr.end());
 
         if (translatedData.compare(str) != 0){ //check to make sure that the encrypted is the same as athe stored string
@@ -341,10 +348,29 @@ void TCPConn::authClient2(){
             disconnect();
             return;
         }
+
+        std::vector<uint8_t> newcmd2 = getMultipleCmdData(buf, c_sid, c_endsid);
+        if (newcmd2.size() == 0) {
+            std::stringstream msg;
+            msg << "SID string from connected server invalid format. Cannot authenticate.";
+            _server_log.writeLog(msg.str().c_str());
+            disconnect();
+            return;
+        }
+
+        std::string node(newcmd2.begin(), newcmd2.end());
+        setNodeID(node.c_str());
+
         _status = s_datatx;
     }
 }
 
+/**********************************************************************************************
+ * authServer1()  - receives  the encrypted string from teh client, checks it against _authstr
+ * gets the random string from the client, encrypts it, and then sends it back. also sends its SID
+ *
+ *    Throws: socket_error for network issues, runtime_error for unrecoverable issues
+ **********************************************************************************************/
 void TCPConn::authServer1(){
     if (_connfd.hasData()) {
         std::vector<uint8_t> buf;
@@ -387,6 +413,7 @@ void TCPConn::authServer1(){
     }
 }
 
+//sendRandomAuth(): sends random vector<uint_8> to client/server and stores it in _authstr
 void TCPConn::sendRandomAuth(){
     createRandAuthStr();
     auto buf = std::vector<uint8_t>(auth_size);
@@ -395,6 +422,7 @@ void TCPConn::sendRandomAuth(){
     sendData(buf);
 }
 
+//actually generates the random vector<unint_8>
 void TCPConn::createRandAuthStr(){
     std::default_random_engine generator{std::random_device{}()};
     std::uniform_int_distribution<uint8_t > distribution(0, 225);
@@ -411,24 +439,6 @@ void TCPConn::createRandAuthStr(){
 
 void TCPConn::transmitData() {
 
-   // If data on the socket, should be our Auth string from our host server
-   if (_connfd.hasData()) {
-      std::vector<uint8_t> buf;
-
-      if (!getData(buf))
-         return;
-
-      if (!getCmdData(buf, c_sid, c_endsid)) {
-         std::stringstream msg;
-         msg << "SID string from connected server invalid format. Cannot authenticate.";
-         _server_log.writeLog(msg.str().c_str());
-         disconnect();
-         return;
-      }
-
-      std::string node(buf.begin(), buf.end());
-      setNodeID(node.c_str());
-
       // Send the replication data
       sendData(_outputbuf);
 
@@ -438,7 +448,7 @@ void TCPConn::transmitData() {
 
       // Wait for their response
       _status = s_waitack;
-   }
+
 }
 
 
