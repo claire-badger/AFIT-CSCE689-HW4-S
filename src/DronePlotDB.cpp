@@ -202,7 +202,7 @@ void DronePlot::clrFlags(unsigned short flags) {
 }
 
 bool DronePlot::isFlagSet(unsigned short flags) {
-   return (bool) _flags & flags;
+    return (bool) (_flags & flags);
 }
 
 /*****************************************************************************************
@@ -454,10 +454,12 @@ std::list<DronePlot>::iterator DronePlotDB::erase(std::list<DronePlot>::iterator
    // First lock the mutex (blocking)
    pthread_mutex_lock(&_mutex);
 
-   return _dbdata.erase(dptr);
+    auto retptr = _dbdata.erase(dptr);
 
    // Unlock the mutex before we exit
    pthread_mutex_unlock(&_mutex);
+
+   return retptr;
 
 }
 
